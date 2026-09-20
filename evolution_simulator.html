@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Evolution Simulator | Benchmark</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
+        :root {
+            --neon-green: #00ff66;
+            --neon-blue: #00f0ff;
+            --neon-pink: #ff0055;
+            --bg-color: #050505;
+            --panel-bg: rgba(10, 10, 15, 0.7);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-color);
+            color: white;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            touch-action: none; /* Prevent pull-to-refresh on mobile */
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            /* Slight glow effect using CSS filter, though canvas composite handles most */
+            filter: drop-shadow(0 0 4px rgba(0, 255, 102, 0.2));
+        }
+
+        .ui-layer {
+            position: relative;
+            z-index: 10;
+            pointer-events: none; /* Let clicks pass through to canvas if needed */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 100%;
+            width: 100%;
+        }
+
+        .interactive {
+            pointer-events: auto;
+        }
+
+        .glass-panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .tech-font {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Buttons */
+        .btn-game {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: white;
+            padding: 12px 16px;
+            font-weight: bold;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .btn-game:active {
+            transform: scale(0.95);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, var(--neon-blue), var(--neon-green));
+            color: black;
+            border: none;
+            box-shadow: 0 0 15px rgba(0, 255, 102, 0.4);
+        }
+
+        .btn-danger {
+            background: rgba(255, 0, 85, 0.2);
+            border-color: var(--neon-pink);
+            color: var(--neon-pink);
+        }
+
+        /* Modals / Screens */
+        .screen-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(10px);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            transition: opacity 0.3s ease;
+        }
+
+        .hidden-screen {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Text glow */
+        .text-glow-blue { text-shadow: 0 0 10px var(--neon-blue); }
+        .text-glow-green { text-shadow: 0 0 10px var(--neon-green); }
+
+        /* Custom Scrollbar for stats */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.2);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Main Simulation Canvas -->
+    <canvas id="simCanvas"></canvas>
+
+    <!-- UI Overlay (HUD and Controls) -->
+    <div class="ui-layer">
+        
+        <!-- Top HUD -->
+        <header class="glass-panel w-full p-3 md:p-4 interactive flex justify-between items-start">
+            <div class="flex flex-col gap-1">
+                <div class="text-xs text-gray-400 uppercase tracking-widest">Generation</div>
+                <div id="ui-gen" class="tech-font text-xl md:text-2xl font-bold text-white">0</div>
+            </div>
+            
+            <div class="flex flex-col gap-1 items-center">
+                <div class="text-xs text-gray-400 uppercase tracking-widest">Population</div>
+                <div id="ui-pop" class="tech-font text-xl md:text-2xl font-bold text-glow-green text-[#00ff66]">0</div>
+            </div>
+
+            <div class="flex flex-col gap-1 items-end">
+                <div class="text-xs text-gray-400 uppercase tracking-widest">Score</div>
+                <div id="ui-score" class="tech-font text-xl md:text-2xl font-bold text-glow-blue text-[#00f0ff]">0</div>
+            </div>
+        </header>
+
+        <!-- Performance / Debug HUD (Left Side) -->
+        <div class="absolute left-2 top-24 pointer-events-none">
+            <div class="bg-black/50 backdrop-blur-md rounded-lg p-3 border border-white/10 tech-font text-xs flex flex-col gap-2 w-48">
+                <div class="flex justify-between text-gray-300"><span>FPS:</span> <span id="perf-fps" class="text-white">0</span></div>
+                <div class="flex justify-between text-gray-300"><span>Frame (ms):</span> <span id="perf-frame" class="text-white">0.0</span></div>
+                <div class="flex justify-between text-gray-300"><span>Sim (ms):</span> <span id="perf-sim" class="text-white">0.0</span></div>
+                <div class="flex justify-between text-gray-300"><span>Updates/s:</span> <span id="perf-throughput" class="text-[#00ff66]">0</span></div>
+                <div class="flex justify-between text-gray-300"><span>Species:</span> <span id="perf-species" class="text-white">0</span></div>
+                <div class="flex justify-between text-gray-300"><span>Food:</span> <span id="perf-food" class="text-white">0</span></div>
+            </div>
+        </div>
+
+        <!-- Bottom Controls -->
+        <footer class="p-2 md:p-4 interactive mb-2">
+            <div class="bg-black/40 backdrop-blur-md border border-white/10 rounded-2xl p-2 flex justify-between gap-2 max-w-lg mx-auto">
+                <button id="btn-playpause" class="btn-game flex-1">
+                    <span id="icon-playpause" class="text-xl">⏸</span>
+                    <span class="text-[10px] uppercase">Pause</span>
+                </button>
+                <button id="btn-overdrive" class="btn-game flex-1">
+                    <span class="text-xl">⚡</span>
+                    <span class="text-[10px] uppercase text-[#00f0ff]">Overdrive</span>
+                </button>
+                <button id="btn-food" class="btn-game flex-1">
+                    <span class="text-xl">🌱</span>
+                    <span class="text-[10px] uppercase text-[#00ff66]">Add Food</span>
+                </button>
+                <button id="btn-disaster" class="btn-game btn-danger flex-1">
+                    <span class="text-xl">☄️</span>
+                    <span class="text-[10px] uppercase">Disaster</span>
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="screen-start" class="screen-overlay interactive">
+        <div class="text-center max-w-md w-full">
+            <h1 class="text-5xl md:text-6xl font-black mb-2 tracking-tight text-glow-blue text-transparent bg-clip-text bg-gradient-to-r from-[#00f0ff] to-[#00ff66]">EVOLUTION</h1>
+            <h2 class="text-2xl md:text-3xl font-light tracking-widest text-gray-300 mb-8">SIMULATOR</h2>
+            
+            <p class="text-gray-400 mb-8 text-sm md:text-base px-4">
+                This is a CPU/GPU performance benchmark disguised as an ecosystem. 
+                Organisms evolve, mutate, and compete. As the population grows, the computational complexity explodes.
+                <br><br>
+                <span class="text-white font-semibold">How far can your device evolve a universe?</span>
+            </p>
+
+            <button id="btn-start-sim" class="btn-game btn-primary w-full py-4 text-lg rounded-xl interactive">
+                START EVOLUTION
+            </button>
+            
+            <div class="mt-6 text-xs text-gray-500 tech-font">
+                Warning: Will attempt to push device to its limits.
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Over / Results Screen -->
+    <div id="screen-results" class="screen-overlay hidden-screen interactive">
+        <div class="bg-[#0a0a0f] border border-white/20 p-6 rounded-2xl text-center max-w-md w-full shadow-2xl">
+            <h2 class="text-3xl font-black text-[#ff0055] mb-2">EXTINCTION</h2>
+            <p class="text-gray-400 mb-6 text-sm">Simulation collapsed or manually ended.</p>
+            
+            <div class="space-y-4 mb-8 text-left tech-font">
+                <div class="flex justify-between border-b border-white/10 pb-2">
+                    <span class="text-gray-400">Final Score</span>
+                    <span id="res-score" class="text-[#00f0ff] font-bold text-lg">0</span>
+                </div>
+                <div class="flex justify-between border-b border-white/10 pb-2">
+                    <span class="text-gray-400">Peak Population</span>
+                    <span id="res-pop" class="text-white font-bold">0</span>
+                </div>
+                <div class="flex justify-between border-b border-white/10 pb-2">
+                    <span class="text-gray-400">Generations</span>
+                    <span id="res-gen" class="text-white font-bold">0</span>
+                </div>
+                <div class="flex justify-between border-b border-white/10 pb-2">
+                    <span class="text-gray-400">Sustained TPS</span>
+                    <span id="res-tps" class="text-[#00ff66] font-bold">0</span>
+                </div>
+            </div>
+
+            <button id="btn-restart" class="btn-game bg-white text-black w-full py-3 rounded-xl hover:bg-gray-200 interactive">
+                SIMULATE AGAIN
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- CONSTANTS & CONFIG ---
+        const CONFIG = {
+            targetFPS: 60,
+            baseFoodSpawnRate: 2, // food items per tick
+            initialOrganisms: 100,
+            initialFood: 500,
+            worldSizeMultiplier: 1.5, // Relative to screen size
+            maxPopulationLimit: 50000, // Safety cap
+            
+            // Organism Biology
+            baseMetabolism: 0.05,
+            foodEnergy: 40,
+            maxEnergy: 100,
+            reproductionThreshold: 85,
+            mutationRate: 0.1,
+            mutationAmount: 0.15,
+            
+            // Rendering
+            glowEnabled: false, // Turned off by default for high pop performance
+        };
+
+        // --- GLOBAL STATE ---
+        const STATE = {
+            isRunning: false,
+            isOverdrive: false,
+            score: 0,
+            generation: 1,
+            peakPopulation: 0,
+            width: window.innerWidth,
+            height: window.innerHeight,
+            worldWidth: window.innerWidth * CONFIG.worldSizeMultiplier,
+            worldHeight: window.innerHeight * CONFIG.worldSizeMultiplier,
+            camera: { x: 0, y: 0, zoom: 1 }
+        };
+
+        // --- PERFORMANCE METRICS ---
+        const PERF = {
+            lastTime: 0,
+            fps: 0,
+            frameCount: 0,
+            frameTime: 0,
+            simTime: 0,
+            throughput: 0, // Entities updated per second
+            updatesThisSecond: 0,
+            lastFpsUpdate: 0
+        };
+
+        // UI Elements Cache
+        const UI = {
+            gen: document.getElementById('ui-gen'),
+            pop: document.getElementById('ui-pop'),
+            score: document.getElementById('ui-score'),
+            fps: document.getElementById('perf-fps'),
+            frame: document.getElementById('perf-frame'),
+            sim: document.getElementById('perf-sim'),
+            throughput: document.getElementById('perf-throughput'),
+            species: document.getElementById('perf-species'),
+            food: document.getElementById('perf-food'),
+            
+            screenStart: document.getElementById('screen-start'),
+            screenResults: document.getElementById('screen-results'),
+            
+            resScore: document.getElementById('res-score'),
+            resPop: document.getElementById('res-pop'),
+            resGen: document.getElementById('res-gen'),
+            resTps: document.getElementById('res-tps'),
+            
+            btnPlayPause: document.getElementById('btn-playpause'),
+            iconPlayPause: document.getElementById('icon-playpause')
+        };
+
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency on background
+
+        // --- STREAMING_CHUNK:Math and Utility Functions ---
+        // Fast random functions
+        const MathUtils = {
+            random: (min, max) => Math.random() * (max - min) + min,
+            randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
+            clamp: (val, min, max) => Math.min(Math.max(val, min), max),
+            distSq: (x1, y1, x2, y2) => {
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                return dx * dx + dy * dy;
+            },
+            formatNumber: (num) => {
+                if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+                if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+                return Math.floor(num).toString();
+            }
+        };
+
+        // --- STREAMING_CHUNK:Spatial Hash Grid for O(n) Collision ---
+        /*
+         * A highly optimized Spatial Hash Grid. 
+         * Instead of checking every organism against every piece of food O(n^2),
+         * we divide the world into a grid. Entities only check their own cell and 8 neighbors.
+         */
+        class SpatialGrid {
+            constructor(width, height, cellSize) {
+                this.width = width;
+                this.height = height;
+                this.cellSize = cellSize;
+                this.cols = Math.ceil(width / cellSize);
+                this.rows = Math.ceil(height / cellSize);
+                
+                // Using flat arrays for extreme performance instead of objects/Maps
+                this.cells = new Array(this.cols * this.rows);
+                for (let i = 0; i < this.cells.length; i++) {
+                    this.cells[i] = [];
+                }
+            }
+
+            clear() {
+                for (let i = 0; i < this.cells.length; i++) {
+                    this.cells[i].length = 0; // Fast clear without reallocating memory
+                }
+            }
+
+            _getIndex(x, y) {
+                const col = MathUtils.clamp(Math.floor(x / this.cellSize), 0, this.cols - 1);
+                const row = MathUtils.clamp(Math.floor(y / this.cellSize), 0, this.rows - 1);
+                return row * this.cols + col;
+            }
+
+            insert(entity) {
+                const idx = this._getIndex(entity.x, entity.y);
+                this.cells[idx].push(entity);
+            }
+
+            // Returns entities in the cell and 8 adjacent neighbors
+            queryRadius(x, y, radius, outArray) {
+                outArray.length = 0; // Clear output array
+                const col = Math.floor(x / this.cellSize);
+                const row = Math.floor(y / this.cellSize);
+                
+                // Max cells to check based on radius
+                const cellSpan = Math.ceil(radius / this.cellSize);
+
+                for (let r = row - cellSpan; r <= row + cellSpan; r++) {
+                    for (let c = col - cellSpan; c <= col + cellSpan; c++) {
+                        if (r >= 0 && r < this.rows && c >= 0 && c < this.cols) {
+                            const idx = r * this.cols + c;
+                            const cell = this.cells[idx];
+                            for (let i = 0; i < cell.length; i++) {
+                                outArray.push(cell[i]);
+                            }
+                        }
+                    }
+                }
+                return outArray;
+            }
+        }
+
+        // --- STREAMING_CHUNK:Entity Definition and Evolutionary Logic ---
+        
+        class Food {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.energy = CONFIG.foodEnergy;
+                this.active = true;
+            }
+        }
+
+        class Organism {
+            constructor(x, y, genes = null) {
+                this.x = x;
+                this.y = y;
+                this.vx = MathUtils.random(-1, 1);
+                this.vy = MathUtils.random(-1, 1);
+                this.active = true;
+                
+                // Base state
+                this.energy = CONFIG.maxEnergy * 0.5 + MathUtils.random(0, 20);
+                this.age = 0;
+                
+                // Genetics / Traits
+                if (genes) {
+                    this.generation = genes.generation + 1;
+                    this.speed = this.mutate(genes.speed, 0.5, 3.0);
+                    this.vision = this.mutate(genes.vision, 20, 150);
+                    this.size = this.mutate(genes.size, 2, 8);
+                    this.hue = this.mutateHue(genes.hue);
+                } else {
+                    this.generation = 1;
+                    this.speed = MathUtils.random(0.8, 1.5);
+                    this.vision = MathUtils.random(40, 80);
+                    this.size = MathUtils.random(3, 5);
+                    this.hue = MathUtils.randomInt(0, 360);
+                }
+                
+                // Derived stats
+                this.metabolism = CONFIG.baseMetabolism + (this.speed * 0.02) + (this.size * 0.01) + (this.vision * 0.0005);
+                this.speciesId = Math.floor(this.hue / 15); // Group similar colors into species
+            }
+
+            mutate(value, min, max) {
+                if (Math.random() < CONFIG.mutationRate) {
+                    const shift = value * CONFIG.mutationAmount;
+                    value += MathUtils.random(-shift, shift);
+                }
+                return MathUtils.clamp(value, min, max);
+            }
+
+            mutateHue(hue) {
+                if (Math.random() < CONFIG.mutationRate) {
+                    hue += MathUtils.random(-15, 15);
+                    if (hue < 0) hue += 360;
+                    if (hue > 360) hue -= 360;
+                }
+                return hue;
+            }
+
+            update(foodGrid, organismGrid, envCells) {
+                if (!this.active) return;
+
+                this.age++;
+                this.energy -= this.metabolism;
+
+                if (this.energy <= 0 || this.age > 2000) {
+                    this.active = false;
+                    return;
+                }
+
+                // AI / Behavior
+                let targetX = null;
+                let targetY = null;
+                let minDistSq = this.vision * this.vision;
+
+                // Sense Food
+                const nearbyFood = foodGrid.queryRadius(this.x, this.y, this.vision, envCells);
+                
+                for (let i = 0; i < nearbyFood.length; i++) {
+                    const f = nearbyFood[i];
+                    if (!f.active) continue;
+                    
+                    const dSq = MathUtils.distSq(this.x, this.y, f.x, f.y);
+                    
+                    if (dSq < minDistSq) {
+                        minDistSq = dSq;
+                        targetX = f.x;
+                        targetY = f.y;
+                        
+                        // Eat food if close enough
+                        if (dSq < (this.size + 2) * (this.size + 2)) {
+                            f.active = false; // Mark food dead
+                            this.energy = Math.min(this.energy + f.energy, CONFIG.maxEnergy);
+                            targetX = null; // Found and ate, reset target
+                            break;
+                        }
+                    }
+                }
+
+                // Steering
+                if (targetX !== null) {
+                    // Steer towards food
+                    const dx = targetX - this.x;
+                    const dy = targetY - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist > 0) {
+                        this.vx += (dx / dist) * 0.1;
+                        this.vy += (dy / dist) * 0.1;
+                    }
+                } else {
+                    // Random wander
+                    this.vx += MathUtils.random(-0.2, 0.2);
+                    this.vy += MathUtils.random(-0.2, 0.2);
+                }
+
+                // Apply velocity and speed limit
+                const speedSq = this.vx * this.vx + this.vy * this.vy;
+                if (speedSq > this.speed * this.speed) {
+                    const speedMap = this.speed / Math.sqrt(speedSq);
+                    this.vx *= speedMap;
+                    this.vy *= speedMap;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // World Bounds bounce
+                if (this.x < 0) { this.x = 0; this.vx *= -1; }
+                if (this.x > STATE.worldWidth) { this.x = STATE.worldWidth; this.vx *= -1; }
+                if (this.y < 0) { this.y = 0; this.vy *= -1; }
+                if (this.y > STATE.worldHeight) { this.y = STATE.worldHeight; this.vy *= -1; }
+            }
+        }
+
+        // --- STREAMING_CHUNK:Simulation Engine & Data Management ---
+        /*
+         * Manages lists of entities and runs the game loop physics.
+         * Optimized with flat arrays and O(1) removal.
+         */
+        class SimulationEngine {
+            constructor() {
+                this.organisms = [];
+                this.foods = [];
+                
+                // Max vision radius is ~150, so grid size 150 is optimal
+                this.foodGrid = new SpatialGrid(STATE.worldWidth, STATE.worldHeight, 100);
+                this.orgGrid = new SpatialGrid(STATE.worldWidth, STATE.worldHeight, 100);
+                
+                // Pre-allocated array for grid queries to avoid GC
+                this.queryBuffer = new Array(500); 
+                
+                this.speciesMap = new Map();
+                this.foodSpawnTimer = 0;
+            }
+
+            reset() {
+                this.organisms.length = 0;
+                this.foods.length = 0;
+                this.speciesMap.clear();
+                
+                // Initial Spawns
+                for(let i=0; i<CONFIG.initialOrganisms; i++) {
+                    this.addOrganism(MathUtils.random(0, STATE.worldWidth), MathUtils.random(0, STATE.worldHeight));
+                }
+                for(let i=0; i<CONFIG.initialFood; i++) {
+                    this.addFood(MathUtils.random(0, STATE.worldWidth), MathUtils.random(0, STATE.worldHeight));
+                }
+            }
+
+            addOrganism(x, y, genes = null) {
+                if (this.organisms.length < CONFIG.maxPopulationLimit) {
+                    this.organisms.push(new Organism(x, y, genes));
+                }
+            }
+
+            addFood(x, y) {
+                this.foods.push(new Food(x, y));
+            }
+
+            triggerDisaster() {
+                // Kill 50% of population randomly
+                for (let i = this.organisms.length - 1; i >= 0; i--) {
+                    if (Math.random() < 0.5) {
+                        this.organisms[i].active = false;
+                    }
+                }
+                // Clear some food
+                this.foods.length = Math.floor(this.foods.length * 0.2);
+            }
+
+            step() {
+                const t0 = performance.now();
+                
+                // 1. Populate Spatial Grids
+                this.foodGrid.clear();
+                for (let i = 0; i < this.foods.length; i++) {
+                    this.foodGrid.insert(this.foods[i]);
+                }
+
+                // 2. Update Organisms
+                this.speciesMap.clear();
+                let highestGen = STATE.generation;
+                let newOffspring = [];
+
+                // Fast iteration backward for O(1) removal
+                for (let i = this.organisms.length - 1; i >= 0; i--) {
+                    const org = this.organisms[i];
+                    
+                    org.update(this.foodGrid, this.orgGrid, this.queryBuffer);
+                    
+                    if (!org.active) {
+                        // O(1) removal: Swap with last element and pop
+                        this.organisms[i] = this.organisms[this.organisms.length - 1];
+                        this.organisms.pop();
+                        continue;
+                    }
+
+                    // Reproduction
+                    if (org.energy > CONFIG.reproductionThreshold) {
+                        org.energy -= CONFIG.maxEnergy * 0.4; // Cost of reproduction
+                        newOffspring.push(org);
+                    }
+
+                    // Tracking stats
+                    if (org.generation > highestGen) highestGen = org.generation;
+                    
+                    this.speciesMap.set(org.speciesId, true);
+                }
+
+                // 3. Process Offspring
+                for (let i = 0; i < newOffspring.length; i++) {
+                    const parent = newOffspring[i];
+                    this.addOrganism(parent.x, parent.y, parent);
+                }
+
+                // 4. Update Food (Remove eaten)
+                for (let i = this.foods.length - 1; i >= 0; i--) {
+                    if (!this.foods[i].active) {
+                        this.foods[i] = this.foods[this.foods.length - 1];
+                        this.foods.pop();
+                    }
+                }
+
+                // 5. Environmental Scaling (Benchmark stresser)
+                // As frames progress and device survives, spawn more food to encourage population explosion
+                const populationRatio = this.organisms.length / 500;
+                let spawns = CONFIG.baseFoodSpawnRate + Math.floor(populationRatio * 2);
+                
+                // If population drops too low, help them out to keep benchmark running
+                if (this.organisms.length < 50) spawns += 10;
+
+                for (let i=0; i<spawns; i++) {
+                    this.addFood(MathUtils.random(0, STATE.worldWidth), MathUtils.random(0, STATE.worldHeight));
+                }
+
+                // Update Globals
+                STATE.generation = highestGen;
+                if (this.organisms.length > STATE.peakPopulation) {
+                    STATE.peakPopulation = this.organisms.length;
+                }
+                
+                // Score = continuous integral of (population * generation) / 100
+                STATE.score += Math.floor((this.organisms.length * highestGen) / 100);
+                
+                PERF.updatesThisSecond += this.organisms.length + this.foods.length;
+
+                const t1 = performance.now();
+                return t1 - t0; // Return simulation time taken
+            }
+        }
+
+        // --- STREAMING_CHUNK:Rendering Engine ---
+        /*
+         * Handles Canvas drawing. Uses batching techniques like fillStyle changes minimized.
+         */
+        class Renderer {
+            constructor(canvas, ctx) {
+                this.canvas = canvas;
+                this.ctx = ctx;
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+            }
+
+            resize() {
+                // Handle high DPI displays
+                const dpr = window.devicePixelRatio || 1;
+                const rect = this.canvas.getBoundingClientRect();
+                
+                this.canvas.width = rect.width * dpr;
+                this.canvas.height = rect.height * dpr;
+                
+                this.ctx.scale(dpr, dpr);
+                
+                STATE.width = rect.width;
+                STATE.height = rect.height;
+                
+                // Update camera to keep world centered roughly
+                STATE.camera.zoom = Math.min(STATE.width / STATE.worldWidth, STATE.height / STATE.worldHeight) * 1.2;
+                STATE.camera.x = (STATE.worldWidth - (STATE.width / STATE.camera.zoom)) / 2;
+                STATE.camera.y = (STATE.worldHeight - (STATE.height / STATE.camera.zoom)) / 2;
+            }
+
+            render(engine) {
+                const ctx = this.ctx;
+                
+                // Clear background
+                ctx.fillStyle = '#050505';
+                ctx.fillRect(0, 0, STATE.width, STATE.height);
+
+                ctx.save();
+                
+                // Camera transform
+                ctx.scale(STATE.camera.zoom, STATE.camera.zoom);
+                ctx.translate(-STATE.camera.x, -STATE.camera.y);
+
+                // Draw Food
+                // Batching food rendering (all same color)
+                ctx.fillStyle = '#00ff66';
+                ctx.beginPath();
+                for (let i = 0; i < engine.foods.length; i++) {
+                    const f = engine.foods[i];
+                    ctx.moveTo(f.x, f.y);
+                    ctx.arc(f.x, f.y, 1.5, 0, Math.PI * 2);
+                }
+                ctx.fill();
+
+                // Draw Organisms
+                // Since they have different colors, we group by Hue to minimize ctx context switching
+                // For peak performance in benchmark, we will render directly without sorting if pop > 10000
+                const useOptimizedDraw = engine.organisms.length > 5000;
+                
+                if (useOptimizedDraw) {
+                    // Fallback to simple fast drawing to save render time, focus on CPU bench
+                    ctx.fillStyle = '#00f0ff';
+                    ctx.beginPath();
+                    for (let i = 0; i < engine.organisms.length; i++) {
+                        const org = engine.organisms[i];
+                        ctx.moveTo(org.x, org.y);
+                        ctx.fillRect(org.x - org.size/2, org.y - org.size/2, org.size, org.size);
+                    }
+                    ctx.fill();
+                } else {
+                    for (let i = 0; i < engine.organisms.length; i++) {
+                        const org = engine.organisms[i];
+                        ctx.fillStyle = `hsl(${org.hue}, 100%, 60%)`;
+                        ctx.beginPath();
+                        ctx.arc(org.x, org.y, org.size, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+
+                ctx.restore();
+            }
+        }
+
+        // --- STREAMING_CHUNK:Main Application Loop and Controls ---
+        const engine = new SimulationEngine();
+        const renderer = new Renderer(canvas, ctx);
+        
+        let animationFrameId;
+
+        function updateUI() {
+            UI.gen.textContent = STATE.generation;
+            UI.pop.textContent = MathUtils.formatNumber(engine.organisms.length);
+            UI.score.textContent = MathUtils.formatNumber(STATE.score);
+            
+            // Performance Stats Update (once per second)
+            const now = performance.now();
+            if (now - PERF.lastFpsUpdate > 1000) {
+                UI.fps.textContent = PERF.fps;
+                UI.frame.textContent = PERF.frameTime.toFixed(1);
+                UI.sim.textContent = PERF.simTime.toFixed(1);
+                UI.throughput.textContent = MathUtils.formatNumber(PERF.updatesThisSecond);
+                UI.species.textContent = engine.speciesMap.size;
+                UI.food.textContent = MathUtils.formatNumber(engine.foods.length);
+                
+                // Color code FPS
+                if (PERF.fps >= 55) UI.fps.className = 'text-[#00ff66] font-bold';
+                else if (PERF.fps >= 30) UI.fps.className = 'text-yellow-400 font-bold';
+                else UI.fps.className = 'text-[#ff0055] font-bold';
+
+                PERF.fps = PERF.frameCount;
+                PERF.frameCount = 0;
+                PERF.updatesThisSecond = 0;
+                PERF.lastFpsUpdate = now;
+            }
+        }
+
+        function gameLoop(timestamp) {
+            if (!STATE.isRunning) return;
+
+            const frameStart = performance.now();
+            
+            // 1. Simulation Phase
+            let simDuration = 0;
+            
+            // Overdrive mode forces multiple physics steps per render frame
+            const steps = STATE.isOverdrive ? 3 : 1;
+            for(let i=0; i<steps; i++) {
+                simDuration += engine.step();
+            }
+            
+            // Smooth out sim time reading
+            PERF.simTime = PERF.simTime * 0.9 + simDuration * 0.1;
+
+            // 2. Render Phase
+            renderer.render(engine);
+            
+            const frameEnd = performance.now();
+            const totalFrameTime = frameEnd - frameStart;
+            
+            PERF.frameTime = PERF.frameTime * 0.9 + totalFrameTime * 0.1;
+            PERF.frameCount++;
+
+            // Update DOM UI
+            updateUI();
+
+            // Extinction check
+            if (engine.organisms.length === 0) {
+                gameOver();
+                return;
+            }
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- STREAMING_CHUNK:Event Listeners and Lifecycle ---
+        
+        function startGame() {
+            STATE.isRunning = true;
+            STATE.score = 0;
+            STATE.generation = 1;
+            STATE.peakPopulation = 0;
+            
+            engine.reset();
+            
+            UI.screenStart.classList.add('hidden-screen');
+            UI.screenResults.classList.add('hidden-screen');
+            
+            PERF.lastFpsUpdate = performance.now();
+            PERF.frameCount = 0;
+            
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            STATE.isRunning = false;
+            UI.screenResults.classList.remove('hidden-screen');
+            
+            // Populate results
+            UI.resScore.textContent = MathUtils.formatNumber(STATE.score);
+            UI.resPop.textContent = MathUtils.formatNumber(STATE.peakPopulation);
+            UI.resGen.textContent = STATE.generation;
+            
+            // Calculate final average TPS from UI element text (quick hack for display)
+            UI.resTps.textContent = UI.throughput.textContent;
+        }
+
+        function togglePause() {
+            STATE.isRunning = !STATE.isRunning;
+            if (STATE.isRunning) {
+                UI.iconPlayPause.textContent = '⏸';
+                UI.iconPlayPause.nextElementSibling.textContent = 'Pause';
+                PERF.lastFpsUpdate = performance.now();
+                requestAnimationFrame(gameLoop);
+            } else {
+                UI.iconPlayPause.textContent = '▶';
+                UI.iconPlayPause.nextElementSibling.textContent = 'Resume';
+            }
+        }
+
+        // UI Bindings
+        document.getElementById('btn-start-sim').addEventListener('click', startGame);
+        document.getElementById('btn-restart').addEventListener('click', startGame);
+        
+        UI.btnPlayPause.addEventListener('click', togglePause);
+        
+        document.getElementById('btn-overdrive').addEventListener('click', (e) => {
+            STATE.isOverdrive = !STATE.isOverdrive;
+            e.currentTarget.style.background = STATE.isOverdrive ? 'rgba(0, 240, 255, 0.3)' : '';
+        });
+        
+        document.getElementById('btn-food').addEventListener('click', () => {
+            // Drop a massive food bomb in the center
+            for(let i=0; i<500; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = Math.random() * 200;
+                engine.addFood(STATE.worldWidth/2 + Math.cos(angle)*r, STATE.worldHeight/2 + Math.sin(angle)*r);
+            }
+        });
+        
+        document.getElementById('btn-disaster').addEventListener('click', () => {
+            engine.triggerDisaster();
+            
+            // Flash screen red
+            const flash = document.createElement('div');
+            flash.style.position = 'absolute';
+            flash.style.inset = '0';
+            flash.style.backgroundColor = 'rgba(255, 0, 85, 0.4)';
+            flash.style.pointerEvents = 'none';
+            flash.style.zIndex = '9999';
+            flash.style.transition = 'opacity 0.5s ease';
+            document.body.appendChild(flash);
+            
+            setTimeout(() => {
+                flash.style.opacity = '0';
+                setTimeout(() => flash.remove(), 500);
+            }, 100);
+        });
+
+        // Touch / Pan mechanics for Canvas
+        let isDragging = false;
+        let startX, startY;
+
+        canvas.addEventListener('pointerdown', (e) => {
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+        });
+
+        window.addEventListener('pointerup', () => {
+            isDragging = false;
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            
+            STATE.camera.x -= dx / STATE.camera.zoom;
+            STATE.camera.y -= dy / STATE.camera.zoom;
+            
+            // Constrain camera
+            STATE.camera.x = MathUtils.clamp(STATE.camera.x, 0, STATE.worldWidth - (STATE.width / STATE.camera.zoom));
+            STATE.camera.y = MathUtils.clamp(STATE.camera.y, 0, STATE.worldHeight - (STATE.height / STATE.camera.zoom));
+            
+            startX = e.clientX;
+            startY = e.clientY;
+        });
+
+        // Pinch to zoom (basic implementation via wheel for desktop, touch needs more complex handling but this covers general scrolling)
+        canvas.addEventListener('wheel', (e) => {
+            const zoomAmount = e.deltaY > 0 ? 0.9 : 1.1;
+            STATE.camera.zoom = MathUtils.clamp(STATE.camera.zoom * zoomAmount, 0.2, 5.0);
+        });
+
+        // Initialize background rendering for the Start Screen
+        engine.reset();
+        renderer.render(engine);
+
+    </script>
+</body>
+</html>
